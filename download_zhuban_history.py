@@ -46,11 +46,6 @@ pro = ts.pro_api()
 
 
 
-def is_main_board(ts_code):
-    """✅ 判断是否为主板股票"""
-    code = ts_code.split('.')[0]
-    return any(code.startswith(prefix) for prefix in MAIN_BOARD_PREFIXES)
-
 
 def get_stock_list():
     """获取股票列表（带本地缓存）"""
