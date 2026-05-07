@@ -45,6 +45,7 @@ pro = ts.pro_api()
 
 
 
+
 def is_main_board(ts_code):
     """✅ 判断是否为主板股票"""
     code = ts_code.split('.')[0]
