@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>A 股复盘系统 - 100 日涨幅榜</title>
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        body { background-color: #f4f6f9; height: 100vh; overflow: hidden; }
+        .main-container { height: 100%; padding: 20px; display: flex; flex-direction: column; }
+        .header-area { text-align: center; margin-bottom: 15px; flex-shrink: 0; }
+
+        .content-row { display: flex; flex: 1; overflow: hidden; gap: 20px; }
+
+        /* 左侧样式 */
+        .sidebar {
+            flex: 0 0 350px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .rank-list-container {
+            flex: 1;
+            overflow-y: auto;
+            border-top: 1px solid #eee;
+            margin-top: 10px;
+        }
+        .rank-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 10px;
+            border-bottom: 1px solid #f8f8f8;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .rank-item:hover { background-color: #eef2f7; }
+        .rank-item.active { background-color: #e3f2fd; border-left: 4px solid #0d6efd; }
+
+        .rank-num { font-weight: bold; color: #6c757d; width: 25px; }
+        .stock-info { flex-grow: 1; margin-left: 10px; }
+        .stock-name { font-weight: 600; font-size: 14px; display: block; }
+        .stock-code { color: #999; font-size: 12px; }
+        .change-up { color: #dc3545; font-weight: bold; }
+        .change-down { color: #28a745; font-weight: bold; }
+
+        /* 右侧样式 */
+        .chart-panel {
+            flex: 1;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        #chartContainer {
+            width: 100%;
+            height: 100%;
+            flex: 1;
+        }
+        .empty-state {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #aaa;
+            z-index: 0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div class="header-area">
+        <h3>📈 A 股复盘系统</h3>
+        <div class="d-flex justify-content-center align-items-center gap-2 mt-2">
+            <label class="form-label mb-0">选择日期：</label>
+            <input type="date" id="datePicker" class="form-control w-auto">
+            <button onclick="fetchRank()" class="btn btn-primary btn-sm">查询排行</button>
+        </div>
+    </div>
+
+    <div class="content-row">
+        <!-- 左侧：排行榜 -->
+        <div class="sidebar">
+            <h5 class="mb-2">🏆 100 日涨幅前 50</h5>
+            <div id="loadingList" class="text-center py-3" style="display:none;">
+                <div class="spinner-border spinner-border-sm text-primary"></div> 计算中...
+            </div>
+            <div id="rankList" class="rank-list-container">
+                <div class="text-center text-muted mt-5">请选择日期并点击查询</div>
+            </div>
+        </div>
+
+        <!-- 右侧：K 线图 -->
+        <div class="chart-panel">
+            <div id="emptyState" class="empty-state">
+                <h4>👈 请点击左侧股票查看走势</h4>
+                <p>显示所选日期前50日、后20日的K线与成交量（共约70天）</p>
+            </div>
+            <div id="chartContainer"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let myChart = null;
+    const datePicker = document.getElementById('datePicker');
+    datePicker.value = "{{ default_date }}";
+
+    // 初始化 ECharts
+    function initChart() {
+        const chartDom = document.getElementById('chartContainer');
+        if (myChart) { myChart.dispose(); }
+        myChart = echarts.init(chartDom);
+        window.addEventListener('resize', () => myChart.resize());
+    }
+
+    // 获取排行榜
+    async function fetchRank() {
+        const date = datePicker.value;
+        const listDiv = document.getElementById('rankList');
+        const loading = document.getElementById('loadingList');
+
+        listDiv.innerHTML = '';
+        loading.style.display = 'block';
+        document.getElementById('emptyState').style.display = 'block';
+        document.getElementById('chartContainer').style.opacity = '0';
+
+        try {
+            const res = await fetch(`/api/rank?date=${date}`);
+            const data = await res.json();
+            loading.style.display = 'none';
+
+            if (res.status !== 200 || data.error) {
+                listDiv.innerHTML = `<div class="alert alert-warning m-2">${data.error || '查询失败'}</div>`;
+                return;
+            }
+
+            if (data.length === 0) {
+                listDiv.innerHTML = `<div class="alert alert-info m-2">该日期无数据</div>`;
+                return;
+            }
+
+            let html = '';
+            data.forEach((item, index) => {
+                const changeClass = item.change >= 0 ? 'change-up' : 'change-down';
+                const sign = item.change >= 0 ? '+' : '';
+                // 绑定点击事件
+                html += `
+                    <div class="rank-item" onclick="selectStock('${item.code}', '${item.name}', '${date}')">
+                        <span class="rank-num">${index + 1}</span>
+                        <div class="stock-info">
+                            <span class="stock-name">${item.name}</span>
+                            <span class="stock-code">${item.code}</span>
+                        </div>
+                        <span class="${changeClass}">${sign}${item.change}%</span>
+                    </div>
+                `;
+            });
+            listDiv.innerHTML = html;
+            initChart(); // 准备好图表实例
+
+        } catch (err) {
+            loading.style.display = 'none';
+            listDiv.innerHTML = `<div class="alert alert-danger m-2">网络错误</div>`;
+        }
+    }
+
+ async function selectStock(code, name, date) {
+    document.querySelectorAll('.rank-item').forEach(el => el.classList.remove('active'));
+    event.currentTarget.classList.add('active');
+
+    document.getElementById('emptyState').style.display = 'none';
+    document.getElementById('chartContainer').style.opacity = '1';
+
+    myChart.showLoading();
+
+    try {
+        const res = await fetch(`/api/chart?code=${code}&date=${date}`);
+        const result = await res.json();
+        myChart.hideLoading();
+
+        if (res.status !== 200 || result.error) {
+            alert(result.error || '获取图表数据失败');
+            return;
+        }
+
+        // ✅ 添加调试日志
+        console.log('[图表数据] target_date:', result.target_date);
+        console.log('[图表数据] 数据量:', result.data.length);
+        console.log('[图表数据] 日期列表:', result.data.map(d => d.date));
+
+        renderChart(name, code, result.data, result.target_date);
+
+    } catch (err) {
+        myChart.hideLoading();
+        alert('加载图表失败');
+    }
+}
+
+function renderChart(name, code, dataList, targetDateStr) {
+    const dates = dataList.map(item => item.date);
+    const klineData = dataList.map(item => item.kline);
+    const volumes = dataList.map((item, index) => [
+        index,
+        item.volume,
+        item.kline[1] > item.kline[0] ? 1 : -1
+    ]);
+
+    console.log('[标记线] targetDateStr:', targetDateStr);
+    console.log('[标记线] 日期列表:', dates);
+    console.log('[标记线] 是否匹配:', dates.includes(targetDateStr));
+
+    // ✅ 标记线和标记点配置 - 增强视觉效果
+    let markLineData = [];
+    let markPointData = [];
+    if (targetDateStr) {
+        const targetIndex = dates.indexOf(targetDateStr);
+        if (targetIndex !== -1) {
+            markLineData = [{
+                xAxis: targetIndex,
+                label: {
+                    formatter: '复盘日\n' + targetDateStr,
+                    backgroundColor: '#ffeb3b',
+                    padding: [6, 8],
+                    borderRadius: 4,
+                    color: '#333',
+                    fontWeight: 'bold',
+                    fontSize: 12
+                },
+                lineStyle: {
+                    color: '#ff5722',
+                    width: 3,
+                    type: 'dashed'
+                }
+            }];
+
+            markPointData = [{
+                coord: [targetIndex, klineData[targetIndex][1]],
+                symbol: 'pin',
+                symbolSize: 50,
+                itemStyle: {
+                    color: '#ff5722'
+                },
+                label: {
+                    show: true,
+                    formatter: '复盘日',
+                    color: '#fff',
+                    fontSize: 10,
+                    fontWeight: 'bold'
+                }
+            }];
+        } else {
+            console.warn('[标记线] 未找到目标日期');
+        }
+    }
+
+    const option = {
+        title: {
+            text: `${name} (${code}) - 走势分析`,
+            left: 'center'
+        },
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'cross' }
+        },
+        grid: [
+            { left: '10%', right: '8%', height: '60%', top: '60' },
+            { left: '10%', right: '8%', top: '75%', height: '15%' }
+        ],
+        xAxis: [
+            {
+                type: 'category',
+                data: dates,
+                scale: true,
+                boundaryGap: false,
+                axisLine: { onZero: false },
+                splitLine: { show: false },
+                min: 'dataMin',
+                max: 'dataMax',
+                gridIndex: 0,
+                axisLabel: {
+                    formatter: function(value) {
+                        return value.replace(/-/g, '');
+                    }
+                }
+            },
+            {
+                type: 'category',
+                gridIndex: 1,
+                data: dates,
+                boundaryGap: false,
+                axisLine: { onZero: false },
+                axisTick: { show: false },
+                splitLine: { show: false },
+                axisLabel: { show: false },
+                min: 'dataMin',
+                max: 'dataMax'
+            }
+        ],
+        yAxis: [
+            { scale: true, splitArea: { show: true }, gridIndex: 0 },
+            {
+                scale: true,
+                gridIndex: 1,
+                splitNumber: 2,
+                axisLabel: { show: false },
+                axisLine: { show: false },
+                axisTick: { show: false },
+                splitLine: { show: false }
+            }
+        ],
+        dataZoom: [
+            { type: 'inside', xAxisIndex: [0, 1], start: 0, end: 100 },
+            { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: 10, start: 0, end: 100 }
+        ],
+        series: [
+            {
+                name: '日 K',
+                type: 'candlestick',
+                data: klineData,
+                itemStyle: {
+                    color: '#ef232a',
+                    color0: '#14b143',
+                    borderColor: '#ef232a',
+                    borderColor0: '#14b143'
+                },
+                markLine: {
+                    symbol: ['none', 'none'],
+                    data: markLineData,
+                    silent: true
+                },
+                markPoint: {
+                    data: markPointData,
+                    silent: true
+                }
+            },
+            {
+                name: '成交量',
+                type: 'bar',
+                xAxisIndex: 1,
+                yAxisIndex: 1,
+                data: volumes,
+                itemStyle: {
+                    color: function(params) {
+                        return params.value[2] === 1 ? '#ef232a' : '#14b143';
+                    }
+                }
+            }
+        ]
+    };
+
+    myChart.setOption(option, true);
+}
+
+
+    // 页面加载自动查一次
+    // fetchRank();
+
+
+</script>
+
+</body>
+</html>
+
